@@ -483,7 +483,7 @@ export const AUTH_CONFIG = {
   ROUTES: {
     DEFAULT_REDIRECT: '/admin',
   },
-  API_URL: process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080/api/v1',
+  API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080',
 } as const;
 
 export const THEME_CONFIG = {
