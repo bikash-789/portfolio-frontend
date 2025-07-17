@@ -1,5 +1,6 @@
 export const API_CONFIG = {
   BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080/api/v1',
+  API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080',
   JWT_STORAGE_KEY: process.env.NEXT_PUBLIC_JWT_STORAGE_KEY || 'authToken',
   REFRESH_TOKEN_STORAGE_KEY: process.env.NEXT_PUBLIC_REFRESH_TOKEN_STORAGE_KEY || 'refreshToken',
   USER_STORAGE_KEY: process.env.NEXT_PUBLIC_USER_STORAGE_KEY || 'user',
