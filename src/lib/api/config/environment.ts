@@ -5,6 +5,7 @@ export const API_CONFIG = {
   USER_STORAGE_KEY: process.env.NEXT_PUBLIC_USER_STORAGE_KEY || 'user',
   GOOGLE_CLIENT_ID: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '',
   GOOGLE_REDIRECT_URI: process.env.NEXT_PUBLIC_GOOGLE_REDIRECT_URI || 'http://localhost:3000/auth/callback',
+  ADMIN_EMAIL: process.env.NEXT_PUBLIC_ADMIN_EMAIL || '',
   TIMEOUT: 10000,
   MAX_RETRIES: 3,
   RETRY_DELAY: 1000,
