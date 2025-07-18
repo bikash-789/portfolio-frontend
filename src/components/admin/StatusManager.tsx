@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { statusApi, UserStatus, CreateStatusRequest } from '@/lib/api/services/status';
 import { STATUS_CONFIG, STATUS_STYLES, ADMIN_STYLES, STATUS_SERVICE } from '@/constants';
 import { StatusService } from '@/lib/services/StatusService';
@@ -15,6 +15,206 @@ import {
 interface StatusManagerProps {
   className?: string;
 }
+
+interface StatusState {
+  currentStatus: UserStatus | null;
+  statusHistory: UserStatus[];
+  loading: boolean;
+  saving: boolean;
+}
+
+interface UIState {
+  isCustomMode: boolean;
+  showEmojiPicker: boolean;
+  selectedEmoji: string;
+  customMessage: string;
+  clearAfter: number | 'today' | 'week' | 'never';
+}
+
+const useStatusManagement = () => {
+  const isInitialMount = useRef(true);
+  const [state, setState] = useState<StatusState>({
+    currentStatus: null,
+    statusHistory: [],
+    loading: true,
+    saving: false,
+  });
+
+  const fetchCurrentStatus = useCallback(async () => {
+    try {
+      const status = await statusApi.getMyStatus();
+      setState(prev => ({ 
+        ...prev, 
+        currentStatus: status, 
+        loading: false 
+      }));
+      return status;
+    } catch {
+      setState(prev => ({ 
+        ...prev, 
+        currentStatus: null, 
+        loading: false 
+      }));
+      return null;
+    }
+  }, []);
+
+  const fetchStatusHistory = useCallback(async () => {
+    try {
+      const history = await statusApi.getStatusHistory(STATUS_SERVICE.DEFAULT_HISTORY_LIMIT);
+      setState(prev => ({ ...prev, statusHistory: history }));
+    } catch {
+      setState(prev => ({ ...prev, statusHistory: [] }));
+    }
+  }, []);
+
+  const refreshData = useCallback(async () => {
+    const [status, history] = await Promise.all([
+      statusApi.getMyStatus().catch(() => null),
+      statusApi.getStatusHistory(STATUS_SERVICE.DEFAULT_HISTORY_LIMIT).catch(() => [])
+    ]);
+    setState(prev => ({ 
+      ...prev, 
+      currentStatus: status, 
+      statusHistory: history 
+    }));
+  }, []);
+
+  const setSaving = useCallback((saving: boolean) => {
+    setState(prev => ({ ...prev, saving }));
+  }, []);
+
+  const clearCurrentStatus = useCallback(() => {
+    setState(prev => ({ ...prev, currentStatus: null }));
+  }, []);
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      fetchCurrentStatus();
+      fetchStatusHistory();
+    }
+  }, [fetchCurrentStatus, fetchStatusHistory]);
+
+  return {
+    ...state,
+    fetchCurrentStatus,
+    fetchStatusHistory,
+    refreshData,
+    setSaving,
+    clearCurrentStatus,
+  };
+};
+
+const useStatusActions = (
+  refreshData: () => Promise<void>,
+  fetchStatusHistory: () => Promise<void>,
+  setSaving: (saving: boolean) => void,
+  clearCurrentStatus: () => void
+) => {
+  const handlePredefinedStatus = useCallback(async (predefinedStatus: (typeof STATUS_CONFIG.PREDEFINED_STATUSES)[number]) => {
+    setSaving(true);
+    try {
+      const statusData: CreateStatusRequest = {
+        emoji: predefinedStatus.emoji,
+        message: predefinedStatus.description,
+        predefinedStatusId: predefinedStatus.id,
+        clearAfter: 'today',
+      };
+      await statusApi.setStatus(statusData);
+      await refreshData();
+    } catch {
+    } finally {
+      setSaving(false);
+    }
+  }, [refreshData, setSaving]);
+
+  const handleCustomStatus = useCallback(async (
+    emoji: string, 
+    message: string, 
+    clearAfter: number | 'today' | 'week' | 'never', 
+    onSuccess: () => void
+  ) => {
+    if (!message.trim()) return;
+    
+    setSaving(true);
+    try {
+      const statusData: CreateStatusRequest = {
+        emoji,
+        message: message.trim(),
+        clearAfter,
+      };
+      await statusApi.setStatus(statusData);
+      await refreshData();
+      onSuccess();
+    } catch {
+    } finally {
+      setSaving(false);
+    }
+  }, [refreshData, setSaving]);
+
+  const handleClearStatus = useCallback(async () => {
+    setSaving(true);
+    try {
+      await statusApi.clearStatus();
+      clearCurrentStatus();
+      await fetchStatusHistory();
+    } catch {
+    } finally {
+      setSaving(false);
+    }
+  }, [clearCurrentStatus, fetchStatusHistory, setSaving]);
+
+  return {
+    handlePredefinedStatus,
+    handleCustomStatus,
+    handleClearStatus,
+  };
+};
+
+const useUIState = (currentStatus: UserStatus | null) => {
+  const [uiState, setUIState] = useState<UIState>({
+    isCustomMode: false,
+    showEmojiPicker: false,
+    selectedEmoji: STATUS_CONFIG.DEFAULT_EMOJI,
+    customMessage: '',
+    clearAfter: 'never',
+  });
+
+  useEffect(() => {
+    if (currentStatus) {
+      setUIState(prev => ({
+        ...prev,
+        selectedEmoji: currentStatus.emoji,
+        customMessage: currentStatus.message,
+      }));
+    }
+  }, [currentStatus]);
+
+  const updateUIState = useCallback((updates: Partial<UIState>) => {
+    setUIState(prev => ({ ...prev, ...updates }));
+  }, []);
+
+  const setSelectedEmoji = useCallback((emoji: string) => {
+    setUIState(prev => ({ ...prev, selectedEmoji: emoji }));
+  }, []);
+
+  const toggleEmojiPicker = useCallback(() => {
+    setUIState(prev => ({ ...prev, showEmojiPicker: !prev.showEmojiPicker }));
+  }, []);
+
+  const closeEmojiPicker = useCallback(() => {
+    setUIState(prev => ({ ...prev, showEmojiPicker: false }));
+  }, []);
+
+  return {
+    uiState,
+    updateUIState,
+    setSelectedEmoji,
+    toggleEmojiPicker,
+    closeEmojiPicker,
+  };
+};
 
 const EmojiPickerService = {
   handleEmojiSelect: (emoji: string, onSelect: (emoji: string) => void, onClose: () => void) => {
@@ -145,165 +345,35 @@ const StatusHistory = ({
   </div>
 );
 
-const StatusManagerService = {
-  async fetchCurrentStatus(): Promise<UserStatus | null> {
-    try {
-      return await statusApi.getMyStatus();
-    } catch {
-      return null;
-    }
-  },
-
-  async fetchStatusHistory(): Promise<UserStatus[]> {
-    try {
-      return await statusApi.getStatusHistory(STATUS_SERVICE.DEFAULT_HISTORY_LIMIT);
-    } catch {
-      return [];
-    }
-  },
-
-  async setPredefinedStatus(predefinedStatus: (typeof STATUS_CONFIG.PREDEFINED_STATUSES)[number]): Promise<UserStatus | null> {
-    try {
-      const statusData: CreateStatusRequest = {
-        emoji: predefinedStatus.emoji,
-        message: predefinedStatus.description,
-        predefinedStatusId: predefinedStatus.id,
-        clearAfter: 'today',
-      };
-      return await statusApi.setStatus(statusData);
-    } catch {
-      return null;
-    }
-  },
-
-  async setCustomStatus(emoji: string, message: string, clearAfter: number | 'today' | 'week' | 'never'): Promise<UserStatus | null> {
-    if (!message.trim()) return null;
-    
-    try {
-      const statusData: CreateStatusRequest = {
-        emoji,
-        message: message.trim(),
-        clearAfter,
-      };
-      return await statusApi.setStatus(statusData);
-    } catch {
-      return null;
-    }
-  },
-
-  async clearStatus(): Promise<boolean> {
-    try {
-      await statusApi.clearStatus();
-      return true;
-    } catch {
-      return false;
-    }
-  },
-};
-
-const useStatusManager = () => {
-  const [currentStatus, setCurrentStatus] = useState<UserStatus | null>(null);
-  const [statusHistory, setStatusHistory] = useState<UserStatus[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  const refreshData = async () => {
-    const [status, history] = await Promise.all([
-      StatusManagerService.fetchCurrentStatus(),
-      StatusManagerService.fetchStatusHistory()
-    ]);
-    setCurrentStatus(status);
-    setStatusHistory(history);
-  };
-
-  const fetchCurrentStatus = async () => {
-    const status = await StatusManagerService.fetchCurrentStatus();
-    setCurrentStatus(status);
-    setLoading(false);
-    return status;
-  };
-
-  const fetchStatusHistory = async () => {
-    const history = await StatusManagerService.fetchStatusHistory();
-    setStatusHistory(history);
-  };
-
-  const handlePredefinedStatus = async (predefinedStatus: (typeof STATUS_CONFIG.PREDEFINED_STATUSES)[number]) => {
-    setSaving(true);
-    await StatusManagerService.setPredefinedStatus(predefinedStatus);
-    await refreshData();
-    setSaving(false);
-  };
-
-  const handleCustomStatus = async (emoji: string, message: string, clearAfter: number | 'today' | 'week' | 'never', onSuccess: () => void) => {
-    setSaving(true);
-    const result = await StatusManagerService.setCustomStatus(emoji, message, clearAfter);
-    if (result) {
-      await refreshData();
-      onSuccess();
-    }
-    setSaving(false);
-  };
-
-  const handleClearStatus = async () => {
-    setSaving(true);
-    const success = await StatusManagerService.clearStatus();
-    if (success) {
-      setCurrentStatus(null);
-      await fetchStatusHistory();
-    }
-    setSaving(false);
-  };
-
-  return {
-    currentStatus,
-    statusHistory,
-    loading,
-    saving,
-    fetchCurrentStatus,
-    fetchStatusHistory,
-    handlePredefinedStatus,
-    handleCustomStatus,
-    handleClearStatus,
-  };
-};
-
 const StatusManager: React.FC<StatusManagerProps> = ({ className = '' }) => {
   const {
     currentStatus,
     statusHistory,
     loading,
     saving,
-    fetchCurrentStatus,
     fetchStatusHistory,
+    refreshData,
+    setSaving,
+    clearCurrentStatus,
+  } = useStatusManagement();
+  
+  const {
+    uiState,
+    updateUIState,
+    setSelectedEmoji,
+    toggleEmojiPicker,
+    closeEmojiPicker,
+  } = useUIState(currentStatus);
+
+  const {
     handlePredefinedStatus,
     handleCustomStatus,
     handleClearStatus,
-  } = useStatusManager();
-  
-  const [isCustomMode, setIsCustomMode] = useState(false);
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [selectedEmoji, setSelectedEmoji] = useState<string>(STATUS_CONFIG.DEFAULT_EMOJI);
-  const [customMessage, setCustomMessage] = useState('');
-  const [clearAfter, setClearAfter] = useState<number | 'today' | 'week' | 'never'>('never');
-
-  useEffect(() => {
-    const initializeStatus = async () => {
-      const status = await fetchCurrentStatus();
-      if (status) {
-        setSelectedEmoji(status.emoji);
-        setCustomMessage(status.message);
-      }
-    };
-    
-    initializeStatus();
-    fetchStatusHistory();
-  }, [fetchCurrentStatus, fetchStatusHistory]);
+  } = useStatusActions(refreshData, fetchStatusHistory, setSaving, clearCurrentStatus);
 
   const onCustomStatusSubmit = async () => {
-    await handleCustomStatus(selectedEmoji, customMessage, clearAfter, () => {
-      setIsCustomMode(false);
-      setCustomMessage('');
+    await handleCustomStatus(uiState.selectedEmoji, uiState.customMessage, uiState.clearAfter, () => {
+      updateUIState({ isCustomMode: false, customMessage: '' });
     });
   };
 
@@ -366,9 +436,9 @@ const StatusManager: React.FC<StatusManagerProps> = ({ className = '' }) => {
         {/* Mode Toggle */}
         <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2 mb-6 w-full">
           <button
-            onClick={() => setIsCustomMode(false)}
+            onClick={() => updateUIState({ isCustomMode: false })}
             className={`flex items-center justify-center space-x-2 px-4 py-2 rounded-lg transition-colors w-full sm:flex-1 ${
-              !isCustomMode
+              !uiState.isCustomMode
                 ? 'bg-primary-600 text-white'
                 : 'bg-secondary-100 dark:bg-dark-700 text-secondary-700 dark:text-dark-300'
             }`}
@@ -377,9 +447,9 @@ const StatusManager: React.FC<StatusManagerProps> = ({ className = '' }) => {
             <span>Quick Status</span>
           </button>
           <button
-            onClick={() => setIsCustomMode(true)}
+            onClick={() => updateUIState({ isCustomMode: true })}
             className={`flex items-center justify-center space-x-2 px-4 py-2 rounded-lg transition-colors w-full sm:flex-1 ${
-              isCustomMode
+              uiState.isCustomMode
                 ? 'bg-primary-600 text-white'
                 : 'bg-secondary-100 dark:bg-dark-700 text-secondary-700 dark:text-dark-300'
             }`}
@@ -390,7 +460,7 @@ const StatusManager: React.FC<StatusManagerProps> = ({ className = '' }) => {
         </div>
 
         {/* Predefined Statuses */}
-        {!isCustomMode && (
+        {!uiState.isCustomMode && (
           <div className="grid grid-cols-1 gap-3">
             {STATUS_CONFIG.PREDEFINED_STATUSES.map((status) => (
               <button
@@ -414,21 +484,21 @@ const StatusManager: React.FC<StatusManagerProps> = ({ className = '' }) => {
         )}
 
         {/* Custom Status Form */}
-        {isCustomMode && (
+        {uiState.isCustomMode && (
           <div className="space-y-4 w-full">
             <div className="flex space-x-4 w-full">
               <div className="relative flex-shrink-0">
                 <button
-                  onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                  onClick={toggleEmojiPicker}
                   className="flex items-center justify-center w-12 h-12 text-2xl bg-white dark:bg-dark-800 border border-secondary-200 dark:border-dark-600 rounded-lg hover:border-primary-300 dark:hover:border-primary-600 transition-colors"
                 >
-                  {selectedEmoji}
+                  {uiState.selectedEmoji}
                 </button>
-                {showEmojiPicker && (
+                {uiState.showEmojiPicker && (
                   <EmojiPicker
-                    selectedEmoji={selectedEmoji}
+                    selectedEmoji={uiState.selectedEmoji}
                     onEmojiSelect={setSelectedEmoji}
-                    onClose={() => setShowEmojiPicker(false)}
+                    onClose={closeEmojiPicker}
                   />
                 )}
               </div>
@@ -436,14 +506,14 @@ const StatusManager: React.FC<StatusManagerProps> = ({ className = '' }) => {
               <div className="flex-1 min-w-0">
                 <input
                   type="text"
-                  value={customMessage}
-                  onChange={(e) => setCustomMessage(e.target.value)}
+                  value={uiState.customMessage}
+                  onChange={(e) => updateUIState({ customMessage: e.target.value })}
                   placeholder="What's your status?"
                   maxLength={STATUS_CONFIG.MAX_MESSAGE_LENGTH}
                   className="w-full px-4 py-3 border border-secondary-300 dark:border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-dark-700 text-secondary-900 dark:text-white placeholder-secondary-500 dark:placeholder-dark-400"
                 />
                 <p className="text-xs text-secondary-500 dark:text-dark-400 mt-1">
-                  {customMessage.length}/{STATUS_CONFIG.MAX_MESSAGE_LENGTH} characters
+                  {uiState.customMessage.length}/{STATUS_CONFIG.MAX_MESSAGE_LENGTH} characters
                 </p>
               </div>
             </div>
@@ -453,8 +523,8 @@ const StatusManager: React.FC<StatusManagerProps> = ({ className = '' }) => {
                 Clear status
               </label>
               <select
-                value={clearAfter}
-                onChange={(e) => setClearAfter(e.target.value as number | 'today' | 'week' | 'never')}
+                value={uiState.clearAfter}
+                onChange={(e) => updateUIState({ clearAfter: e.target.value as number | 'today' | 'week' | 'never' })}
                 className="w-full px-3 py-2 border border-secondary-300 dark:border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-dark-700 text-secondary-900 dark:text-white"
               >
                 {STATUS_CONFIG.CLEAR_OPTIONS.map((option) => (
@@ -468,7 +538,7 @@ const StatusManager: React.FC<StatusManagerProps> = ({ className = '' }) => {
             <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3 w-full">
               <button
                 onClick={onCustomStatusSubmit}
-                disabled={!customMessage.trim() || saving}
+                disabled={!uiState.customMessage.trim() || saving}
                 className="flex items-center justify-center space-x-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-gray-400 text-white rounded-lg transition-colors w-full sm:w-auto"
               >
                 <CheckCircle size={16} />
@@ -476,8 +546,7 @@ const StatusManager: React.FC<StatusManagerProps> = ({ className = '' }) => {
               </button>
               <button
                 onClick={() => {
-                  setIsCustomMode(false);
-                  setCustomMessage('');
+                  updateUIState({ isCustomMode: false, customMessage: '' });
                 }}
                 className="px-4 py-2 text-secondary-700 dark:text-dark-300 hover:text-secondary-900 dark:hover:text-white transition-colors w-full sm:w-auto text-center"
               >
@@ -491,7 +560,9 @@ const StatusManager: React.FC<StatusManagerProps> = ({ className = '' }) => {
       {/* Status History */}
       <StatusHistory 
         history={statusHistory} 
-        onClearHistory={fetchStatusHistory}
+        onClearHistory={() => {
+          fetchStatusHistory();
+        }}
       />
     </div>
   );
