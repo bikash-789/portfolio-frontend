@@ -1,12 +1,124 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { projectsApi, Project } from '@/lib/api/services/projects';
-import { useApi } from '@/lib/api/hooks/useApi';
+import { projectsApi, Project, ProjectFilters } from '@/lib/api/services/projects';
 import DynamicImage from '@/components/DynamicImage';
 import { ADMIN_STYLES, ADMIN_PAGES, STATUS_COLORS } from '@/constants';
+
+type CategoryFilter = 'all' | string;
+
+interface ProjectState {
+  projects: Project[];
+  loading: boolean;
+  error: string | null;
+}
+
+interface FilterState {
+  searchTerm: string;
+  selectedCategory: CategoryFilter;
+  showFeaturedOnly: boolean;
+}
+
+const useProjectsManagement = () => {
+  const isInitialMount = useRef(true);
+  const [state, setState] = useState<ProjectState>({
+    projects: [],
+    loading: true,
+    error: null,
+  });
+
+  const [filters, setFilters] = useState<FilterState>({
+    searchTerm: '',
+    selectedCategory: 'all',
+    showFeaturedOnly: false,
+  });
+
+  const fetchProjects = useCallback(async () => {
+    setState(prev => ({ ...prev, loading: true, error: null }));
+    
+    try {
+      const apiFilters: ProjectFilters = {
+        search: filters.searchTerm || undefined,
+        category: filters.selectedCategory !== 'all' ? filters.selectedCategory : undefined,
+        featured: filters.showFeaturedOnly ? true : undefined,
+      };
+      
+      const data = await projectsApi.getProjects(apiFilters);
+      setState(prev => ({ 
+        ...prev, 
+        projects: data?.projects || [], 
+        loading: false 
+      }));
+    } catch (err) {
+      console.error('Error fetching projects:', err);
+      setState(prev => ({ 
+        ...prev, 
+        error: 'Failed to load projects', 
+        projects: [], 
+        loading: false 
+      }));
+    }
+  }, [filters.searchTerm, filters.selectedCategory, filters.showFeaturedOnly]);
+
+  const updateFilters = useCallback((updates: Partial<FilterState>) => {
+    setFilters(prev => ({ ...prev, ...updates }));
+  }, []);
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    const timeoutId = setTimeout(fetchProjects, 300);
+    return () => clearTimeout(timeoutId);
+  }, [fetchProjects]);
+
+  return {
+    ...state,
+    filters,
+    updateFilters,
+    fetchProjects,
+  };
+};
+
+const useProjectActions = (refetchProjects: () => void) => {
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+
+  const handleEditProject = useCallback((project: Project) => {
+    return `/admin/projects/edit/${project.id}`;
+  }, []);
+
+  const handleDeleteProject = useCallback((project: Project) => {
+    setSelectedProject(project);
+  }, []);
+
+  const confirmDelete = useCallback(async () => {
+    if (!selectedProject) return;
+    
+    try {
+      await projectsApi.deleteProject(selectedProject.id);
+      setSelectedProject(null);
+      refetchProjects();
+    } catch (error) {
+      console.error('Error deleting project:', error);
+    }
+  }, [selectedProject, refetchProjects]);
+
+  const resetModals = useCallback(() => {
+    setSelectedProject(null);
+  }, []);
+
+  return {
+    selectedProject,
+    handleEditProject,
+    handleDeleteProject,
+    confirmDelete,
+    resetModals,
+  };
+};
 
 const getDurationText = (startDate: string, endDate: string): string => {
   const start = new Date(startDate);
@@ -244,53 +356,19 @@ const StatsCard = ({ icon, label, value, colorClass }: {
 export default function ProjectsManagement() {
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
-  const [showFeaturedOnly, setShowFeaturedOnly] = useState(false);
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [, setShowDeleteModal] = useState(false);
-
-  const getProjectsFunction = useCallback(() => {
-    return projectsApi.getProjects({
-      search: searchTerm || undefined,
-      category: selectedCategory !== 'all' ? selectedCategory : undefined,
-      featured: showFeaturedOnly ? true : undefined,
-    });
-  }, [searchTerm, selectedCategory, showFeaturedOnly]);
-
-  const { data: projectsData, loading, error, execute: fetchProjects } = useApi(
-    getProjectsFunction,
-    true
-  );
-
-  const projects = projectsData?.projects || [];
+  const { projects, loading, error, filters, updateFilters, fetchProjects } = useProjectsManagement();
+  const { selectedProject, handleEditProject, handleDeleteProject, confirmDelete, resetModals } = useProjectActions(fetchProjects);
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
       router.push('/login');
+      return;
     }
-  }, [isAuthenticated, authLoading, router]);
-
-  const handleEditProject = (project: Project) => {
-    router.push(`/admin/projects/edit/${project.id}`);
-  };
-
-  const handleDeleteProject = (project: Project) => {
-    setSelectedProject(project);
-    setShowDeleteModal(true);
-  };
-
-  const confirmDelete = async () => {
-    if (!selectedProject) return;
     
-    try {
-      await projectsApi.deleteProject(selectedProject.id);
-      setShowDeleteModal(false);
-      setSelectedProject(null);
+    if (isAuthenticated) {
       fetchProjects();
-    } catch {
     }
-  };
+  }, [isAuthenticated, authLoading, router, fetchProjects]);
 
   if (authLoading) {
     return <LoadingView />;
@@ -299,6 +377,11 @@ export default function ProjectsManagement() {
   const activeProjects = projects.filter(p => !p.endDate || new Date() <= new Date(p.endDate));
   const featuredProjects = projects.filter(p => p.featured);
   const categories = new Set(projects.map(p => p.category));
+
+  const onEditProject = (project: Project) => {
+    const editPath = handleEditProject(project);
+    router.push(editPath);
+  };
 
   return (
     <div className={`min-h-screen ${ADMIN_STYLES.GRADIENT_BG}`}>
@@ -320,9 +403,9 @@ export default function ProjectsManagement() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className={`${ADMIN_STYLES.CARD_BG} rounded-xl ${ADMIN_STYLES.SHADOW} p-6 mb-6`}>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <SearchInput value={searchTerm} onChange={setSearchTerm} />
-            <CategoryFilter value={selectedCategory} onChange={setSelectedCategory} />
-            <FeaturedFilter value={showFeaturedOnly} onChange={setShowFeaturedOnly} />
+            <SearchInput value={filters.searchTerm} onChange={(value) => updateFilters({ searchTerm: value })} />
+            <CategoryFilter value={filters.selectedCategory} onChange={(value) => updateFilters({ selectedCategory: value })} />
+            <FeaturedFilter value={filters.showFeaturedOnly} onChange={(value) => updateFilters({ showFeaturedOnly: value })} />
           </div>
         </div>
 
@@ -383,13 +466,13 @@ export default function ProjectsManagement() {
                           {project.technologies.slice(0, 3).map((tech, index) => (
                             <span
                               key={index}
-                              className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-200"
+                              className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-secondary-100 dark:bg-secondary-900/20 text-secondary-800 dark:text-secondary-200"
                             >
                               {tech}
                             </span>
                           ))}
                           {project.technologies.length > 3 && (
-                            <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 dark:bg-gray-900/20 text-gray-800 dark:text-gray-200">
+                            <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-secondary-100 dark:bg-secondary-900/20 text-secondary-800 dark:text-secondary-200">
                               +{project.technologies.length - 3}
                             </span>
                           )}
@@ -435,7 +518,7 @@ export default function ProjectsManagement() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <ProjectActions 
                           project={project} 
-                          onEdit={handleEditProject} 
+                          onEdit={onEditProject} 
                           onDelete={handleDeleteProject} 
                         />
                       </td>
@@ -478,7 +561,7 @@ export default function ProjectsManagement() {
       <DeleteModal 
         project={selectedProject} 
         onConfirm={confirmDelete} 
-        onCancel={() => setShowDeleteModal(false)} 
+        onCancel={resetModals} 
       />
     </div>
   );
