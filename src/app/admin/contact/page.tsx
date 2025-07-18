@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { contactApi, Contact, ContactFilters } from '@/lib/api/services/contact';
@@ -14,9 +14,152 @@ import {
   Trash,
   Eye,
   Search,
-  SortDown,
-  SortUp,
 } from 'react-bootstrap-icons';
+
+type StatusFilter = 'all' | 'UNREAD' | 'READ' | 'REPLIED' | 'ARCHIVED';
+type SortField = 'createdAt' | 'name' | 'email' | 'status';
+type SortOrder = 'asc' | 'desc';
+
+interface ContactState {
+  messages: Contact[];
+  loading: boolean;
+  error: string | null;
+}
+
+interface FilterState {
+  searchTerm: string;
+  selectedStatus: StatusFilter;
+  sortBy: SortField;
+  sortOrder: SortOrder;
+}
+
+const useContactMessages = () => {
+  const isInitialMount = useRef(true);
+  const [state, setState] = useState<ContactState>({
+    messages: [],
+    loading: true,
+    error: null,
+  });
+
+  const [filters, setFilters] = useState<FilterState>({
+    searchTerm: '',
+    selectedStatus: 'all',
+    sortBy: 'createdAt',
+    sortOrder: 'desc',
+  });
+
+  const { data: stats, execute: fetchStats } = useApi(contactApi.getContactStats, false);
+
+  const fetchMessages = useCallback(async () => {
+    setState(prev => ({ ...prev, loading: true, error: null }));
+    
+    try {
+      const apiFilters: ContactFilters = {
+        limit: 50,
+        page: 1,
+        search: filters.searchTerm || undefined,
+        status: filters.selectedStatus !== 'all' ? filters.selectedStatus : undefined,
+        sortBy: filters.sortBy,
+        sortOrder: filters.sortOrder,
+      };
+      
+      const data = await contactApi.getContacts(apiFilters);
+      setState(prev => ({ ...prev, messages: data?.messages || [], loading: false }));
+    } catch (err) {
+      console.error('Error fetching contacts:', err);
+      setState(prev => ({ 
+        ...prev, 
+        error: 'Failed to load messages', 
+        messages: [], 
+        loading: false 
+      }));
+    }
+  }, [filters.searchTerm, filters.selectedStatus, filters.sortBy, filters.sortOrder]);
+
+  const updateFilters = useCallback((updates: Partial<FilterState>) => {
+    setFilters(prev => ({ ...prev, ...updates }));
+  }, []);
+
+  const refetchData = useCallback(() => {
+    fetchMessages();
+    fetchStats();
+  }, [fetchMessages, fetchStats]);
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    const timeoutId = setTimeout(fetchMessages, 300);
+    return () => clearTimeout(timeoutId);
+  }, [fetchMessages]);
+
+  return {
+    ...state,
+    filters,
+    stats,
+    updateFilters,
+    fetchMessages,
+    fetchStats,
+    refetchData,
+  };
+};
+
+const useContactActions = (refetchData: () => void) => {
+  const [selectedMessage, setSelectedMessage] = useState<Contact | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showMessageModal, setShowMessageModal] = useState(false);
+
+  const handleViewMessage = useCallback((message: Contact) => {
+    setSelectedMessage(message);
+    setShowMessageModal(true);
+    
+    if (message.status === 'UNREAD') {
+      contactApi.markAsRead(message.id).then(refetchData);
+    }
+  }, [refetchData]);
+
+  const handleStatusChange = useCallback(async (messageId: string, newStatus: 'READ' | 'REPLIED' | 'ARCHIVED') => {
+    try {
+      await contactApi.updateContact(messageId, { status: newStatus });
+      refetchData();
+    } catch (error) {
+      console.error('Error updating message status:', error);
+    }
+  }, [refetchData]);
+
+  const handleDeleteMessage = useCallback(async () => {
+    if (!selectedMessage) return;
+
+    try {
+      await contactApi.deleteContact(selectedMessage.id);
+      setShowDeleteModal(false);
+      setSelectedMessage(null);
+      refetchData();
+    } catch (error) {
+      console.error('Error deleting message:', error);
+    }
+  }, [selectedMessage, refetchData]);
+
+  const resetModals = useCallback(() => {
+    setSelectedMessage(null);
+    setShowDeleteModal(false);
+    setShowMessageModal(false);
+  }, []);
+
+  return {
+    selectedMessage,
+    showDeleteModal,
+    showMessageModal,
+    setShowDeleteModal,
+    setShowMessageModal,
+    handleViewMessage,
+    handleStatusChange,
+    handleDeleteMessage,
+    resetModals,
+  };
+};
 
 const LoadingView = () => (
   <div className={`min-h-screen flex items-center justify-center ${ADMIN_STYLES.GRADIENT_BG}`}>
@@ -48,133 +191,101 @@ const StatsCard = ({ icon, label, value, colorClass }: {
           {icon}
         </div>
       </div>
-      <div className="ml-4">
-        <p className="text-sm font-medium text-secondary-500 dark:text-dark-400">{label}</p>
-        <p className="text-2xl font-semibold text-secondary-900 dark:text-white">{value}</p>
+      <div className="ml-5 w-0 flex-1">
+        <dl>
+          <dt className="text-sm font-medium text-secondary-500 dark:text-dark-400 truncate">
+            {label}
+          </dt>
+          <dd className="text-lg font-medium text-secondary-900 dark:text-white">
+            {value}
+          </dd>
+        </dl>
       </div>
     </div>
   </div>
 );
 
-const SearchInput = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
-  <div className="md:col-span-2">
-    <label className="block text-sm font-medium text-secondary-700 dark:text-dark-300 mb-2">
-      Search Messages
-    </label>
-    <div className="relative">
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={ADMIN_PAGES.CONTACT.SEARCH_PLACEHOLDER}
-        className="w-full px-4 py-2 pl-10 border border-secondary-300 dark:border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-dark-700 text-secondary-900 dark:text-white placeholder-secondary-500 dark:placeholder-dark-400"
-      />
-      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-secondary-400 dark:text-dark-500" />
-    </div>
-  </div>
-);
-
-const StatusFilter = ({ value, onChange }: { 
-  value: 'all' | 'UNREAD' | 'READ' | 'REPLIED' | 'ARCHIVED'; 
-  onChange: (value: 'all' | 'UNREAD' | 'READ' | 'REPLIED' | 'ARCHIVED') => void 
+const SearchAndFilters = ({ 
+  filters, 
+  updateFilters 
+}: { 
+  filters: FilterState; 
+  updateFilters: (updates: Partial<FilterState>) => void; 
 }) => (
-  <div>
-    <label className="block text-sm font-medium text-secondary-700 dark:text-dark-300 mb-2">
-      Status
-    </label>
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value as 'all' | 'UNREAD' | 'READ' | 'REPLIED' | 'ARCHIVED')}
-      className="w-full px-4 py-2 border border-secondary-300 dark:border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-dark-700 text-secondary-900 dark:text-white"
-    >
-      <option value="all">All Status</option>
-      <option value="UNREAD">Unread</option>
-      <option value="READ">Read</option>
-      <option value="REPLIED">Replied</option>
-      <option value="ARCHIVED">Archived</option>
-    </select>
-  </div>
-);
-
-const SortControls = ({ 
-  sortBy, 
-  sortOrder, 
-  onSortByChange, 
-  onSortOrderChange 
-}: {
-  sortBy: 'createdAt' | 'name' | 'email' | 'status';
-  sortOrder: 'asc' | 'desc';
-  onSortByChange: (value: 'createdAt' | 'name' | 'email' | 'status') => void;
-  onSortOrderChange: () => void;
-}) => (
-  <div>
-    <label className="block text-sm font-medium text-secondary-700 dark:text-dark-300 mb-2">
-      Sort By
-    </label>
-    <div className="flex space-x-2">
+  <div className={`${ADMIN_STYLES.CARD_BG} rounded-xl ${ADMIN_STYLES.SHADOW} p-6 mb-8`}>
+    <div className="flex flex-col sm:flex-row gap-4">
+      <div className="flex-1">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-secondary-400 w-4 h-4" />
+          <input
+            type="text"
+            placeholder="Search messages..."
+            value={filters.searchTerm}
+            onChange={(e) => updateFilters({ searchTerm: e.target.value })}
+            className="w-full pl-10 pr-4 py-2 border border-secondary-300 dark:border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-dark-700 text-secondary-900 dark:text-white"
+          />
+        </div>
+      </div>
+      
       <select
-        value={sortBy}
-        onChange={(e) => onSortByChange(e.target.value as 'createdAt' | 'name' | 'email' | 'status')}
-        className="flex-1 px-4 py-2 border border-secondary-300 dark:border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-dark-700 text-secondary-900 dark:text-white"
+        value={filters.selectedStatus}
+        onChange={(e) => updateFilters({ selectedStatus: e.target.value as StatusFilter })}
+        className="px-3 py-2 border border-secondary-300 dark:border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-dark-700 text-secondary-900 dark:text-white"
       >
-        <option value="createdAt">Date</option>
-        <option value="name">Name</option>
-        <option value="email">Email</option>
-        <option value="status">Status</option>
+        <option value="all">All Status</option>
+        <option value="UNREAD">Unread</option>
+        <option value="READ">Read</option>
+        <option value="REPLIED">Replied</option>
+        <option value="ARCHIVED">Archived</option>
       </select>
-      <button
-        onClick={onSortOrderChange}
-        className="px-3 py-2 border border-secondary-300 dark:border-dark-600 rounded-lg hover:bg-secondary-50 dark:hover:bg-dark-700 transition-colors duration-300"
+      
+      <select
+        value={`${filters.sortBy}-${filters.sortOrder}`}
+        onChange={(e) => {
+          const [sortBy, sortOrder] = e.target.value.split('-') as [SortField, SortOrder];
+          updateFilters({ sortBy, sortOrder });
+        }}
+        className="px-3 py-2 border border-secondary-300 dark:border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-dark-700 text-secondary-900 dark:text-white"
       >
-        {sortOrder === 'asc' ? <SortUp size={16} /> : <SortDown size={16} />}
-      </button>
+        <option value="createdAt-desc">Newest First</option>
+        <option value="createdAt-asc">Oldest First</option>
+        <option value="name-asc">Name A-Z</option>
+        <option value="name-desc">Name Z-A</option>
+        <option value="email-asc">Email A-Z</option>
+        <option value="email-desc">Email Z-A</option>
+      </select>
     </div>
   </div>
 );
-
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'UNREAD': return STATUS_COLORS.UNREAD;
-    case 'READ': return STATUS_COLORS.READ;
-    case 'REPLIED': return STATUS_COLORS.REPLIED;
-    case 'ARCHIVED': return STATUS_COLORS.ARCHIVED;
-    default: return STATUS_COLORS.ARCHIVED;
-  }
-};
-
-const getStatusIcon = (status: string) => {
-  switch (status) {
-    case 'UNREAD': return <Envelope size={16} />;
-    case 'READ': return <EnvelopeOpen size={16} />;
-    case 'REPLIED': return <Reply size={16} />;
-    case 'ARCHIVED': return <Archive size={16} />;
-    default: return <Envelope size={16} />;
-  }
-};
-
-const formatDate = (dateString: string) => {
-  return new Date(dateString).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-};
 
 const MessageTableLoading = () => (
-  <div className="p-8 text-center">
-    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 mx-auto mb-4"></div>
-    <p className="text-secondary-600 dark:text-dark-300">Loading messages...</p>
+  <div className="animate-pulse">
+    {[...Array(5)].map((_, i) => (
+      <div key={i} className="border-b border-secondary-200 dark:border-dark-700 p-4">
+        <div className="flex items-center space-x-4">
+          <div className="w-8 h-8 bg-secondary-200 dark:bg-dark-600 rounded-full"></div>
+          <div className="flex-1 space-y-2">
+            <div className="h-4 bg-secondary-200 dark:bg-dark-600 rounded w-3/4"></div>
+            <div className="h-3 bg-secondary-200 dark:bg-dark-600 rounded w-1/2"></div>
+          </div>
+        </div>
+      </div>
+    ))}
   </div>
 );
 
 const MessageTableError = ({ error, onRetry }: { error: string; onRetry: () => void }) => (
-  <div className="p-8 text-center">
-    <p className="text-red-600 dark:text-red-400">Error loading messages: {error}</p>
+  <div className="text-center py-12">
+    <div className="text-red-500 dark:text-red-400 mb-4">
+      <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    </div>
+    <h3 className="text-lg font-medium text-secondary-900 dark:text-white mb-2">Error Loading Messages</h3>
+    <p className="text-secondary-600 dark:text-dark-300 mb-4">{error}</p>
     <button
       onClick={onRetry}
-      className="mt-4 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors duration-300"
+      className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors"
     >
       Try Again
     </button>
@@ -182,69 +293,12 @@ const MessageTableError = ({ error, onRetry }: { error: string; onRetry: () => v
 );
 
 const MessageTableEmpty = () => (
-  <div className="p-8 text-center">
-    <Envelope className="mx-auto h-12 w-12 text-secondary-400 dark:text-dark-500 mb-4" />
-    <p className="text-secondary-600 dark:text-dark-300">No messages found</p>
-  </div>
-);
-
-const MessageActions = ({ 
-  message, 
-  onView, 
-  onStatusChange, 
-  onDelete 
-}: {
-  message: Contact;
-  onView: (message: Contact) => void;
-  onStatusChange: (messageId: string, status: 'READ' | 'REPLIED' | 'ARCHIVED') => void;
-  onDelete: (message: Contact) => void;
-}) => (
-  <div className="flex items-center space-x-2">
-    <button
-      onClick={() => onView(message)}
-      className="text-primary-600 dark:text-primary-400 hover:text-primary-900 dark:hover:text-primary-300 transition-colors duration-300"
-      title="View Message"
-    >
-      <Eye size={16} />
-    </button>
-    
-    {message.status === 'UNREAD' && (
-      <button
-        onClick={() => onStatusChange(message.id, 'READ')}
-        className="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-300 transition-colors duration-300"
-        title="Mark as Read"
-      >
-        <EnvelopeOpen size={16} />
-      </button>
-    )}
-    
-    {message.status !== 'REPLIED' && (
-      <button
-        onClick={() => onStatusChange(message.id, 'REPLIED')}
-        className="text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300 transition-colors duration-300"
-        title="Mark as Replied"
-      >
-        <Reply size={16} />
-      </button>
-    )}
-    
-    {message.status !== 'ARCHIVED' && (
-      <button
-        onClick={() => onStatusChange(message.id, 'ARCHIVED')}
-        className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300 transition-colors duration-300"
-        title="Archive"
-      >
-        <Archive size={16} />
-      </button>
-    )}
-    
-    <button
-      onClick={() => onDelete(message)}
-      className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 transition-colors duration-300"
-      title="Delete"
-    >
-      <Trash size={16} />
-    </button>
+  <div className="text-center py-12">
+    <Envelope className="w-12 h-12 text-secondary-400 dark:text-dark-500 mx-auto mb-4" />
+    <h3 className="text-lg font-medium text-secondary-900 dark:text-white mb-2">No Messages Found</h3>
+    <p className="text-secondary-600 dark:text-dark-300">
+      There are no messages matching your current filters.
+    </p>
   </div>
 );
 
@@ -397,89 +451,134 @@ const DeleteModal = ({
   );
 };
 
+const getStatusColor = (status: string) => {
+  switch (status) {
+    case 'UNREAD': return STATUS_COLORS.UNREAD;
+    case 'read':
+    case 'READ': return STATUS_COLORS.READ;
+    case 'REPLIED': return STATUS_COLORS.REPLIED;
+    case 'ARCHIVED': return STATUS_COLORS.ARCHIVED;
+    default: return STATUS_COLORS.UNREAD;
+  }
+};
+
+const getStatusIcon = (status: string) => {
+  switch (status) {
+    case 'UNREAD': return <Envelope className="w-4 h-4" />;
+    case 'read':
+    case 'READ': return <EnvelopeOpen className="w-4 h-4" />;
+    case 'REPLIED': return <Reply className="w-4 h-4" />;
+    case 'ARCHIVED': return <Archive className="w-4 h-4" />;
+    default: return <Envelope className="w-4 h-4" />;
+  }
+};
+
+const formatDate = (dateString: string) => {
+  return new Date(dateString).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const MessageActions = ({ 
+  message, 
+  onView, 
+  onStatusChange, 
+  onDelete 
+}: {
+  message: Contact;
+  onView: (message: Contact) => void;
+  onStatusChange: (messageId: string, status: 'READ' | 'REPLIED' | 'ARCHIVED') => void;
+  onDelete: (message: Contact) => void;
+}) => (
+  <div className="flex items-center space-x-2">
+    <button
+      onClick={() => onView(message)}
+      className="text-primary-600 dark:text-primary-400 hover:text-primary-900 dark:hover:text-primary-300 transition-colors duration-300"
+      title="View Message"
+    >
+      <Eye size={16} />
+    </button>
+    
+    {message.status === 'UNREAD' && (
+      <button
+        onClick={() => onStatusChange(message.id, 'READ')}
+        className="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-300 transition-colors duration-300"
+        title="Mark as Read"
+      >
+        <EnvelopeOpen size={16} />
+      </button>
+    )}
+    
+    {message.status !== 'REPLIED' && (
+      <button
+        onClick={() => onStatusChange(message.id, 'REPLIED')}
+        className="text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300 transition-colors duration-300"
+        title="Mark as Replied"
+      >
+        <Reply size={16} />
+      </button>
+    )}
+    
+    {message.status !== 'ARCHIVED' && (
+      <button
+        onClick={() => onStatusChange(message.id, 'ARCHIVED')}
+        className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300 transition-colors duration-300"
+        title="Archive"
+      >
+        <Archive size={16} />
+      </button>
+    )}
+    
+    <button
+      onClick={() => onDelete(message)}
+      className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 transition-colors duration-300"
+      title="Delete"
+    >
+      <Trash size={16} />
+    </button>
+  </div>
+);
+
 export default function ContactMessages() {
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState<'all' | 'UNREAD' | 'READ' | 'REPLIED' | 'ARCHIVED'>('all');
-  const [sortBy, setSortBy] = useState<'createdAt' | 'name' | 'email' | 'status'>('createdAt');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [selectedMessage, setSelectedMessage] = useState<Contact | null>(null);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [showMessageModal, setShowMessageModal] = useState(false);
+  
+  const {
+    messages,
+    loading,
+    error,
+    filters,
+    stats,
+    updateFilters,
+    refetchData,
+  } = useContactMessages();
 
-  const getMessagesFunction = useCallback(() => {
-    const filters: ContactFilters = {
-      limit: 50,
-      page: 1,
-      search: searchTerm || undefined,
-      status: selectedStatus !== 'all' ? selectedStatus : undefined,
-      sortBy,
-      sortOrder,
-    };
-    return contactApi.getContacts(filters);
-  }, [searchTerm, selectedStatus, sortBy, sortOrder]);
-
-  const { data: messagesData, loading, error, execute: fetchMessages } = useApi(
-    getMessagesFunction,
-    true
-  );
-
-  const { data: stats, execute: fetchStats } = useApi(
-    contactApi.getContactStats,
-    true
-  );
-
-  const messages: Contact[] = messagesData?.messages || [];
+  const {
+    selectedMessage,
+    showDeleteModal,
+    showMessageModal,
+    handleViewMessage,
+    handleStatusChange,
+    handleDeleteMessage,
+    resetModals,
+  } = useContactActions(refetchData);
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
       router.push('/login');
+      return;
     }
-  }, [isAuthenticated, authLoading, router]);
-
-  const handleViewMessage = (message: Contact) => {
-    setSelectedMessage(message);
-    setShowMessageModal(true);
     
-    if (message.status === 'UNREAD') {
-      contactApi.markAsRead(message.id).then(() => {
-        fetchMessages();
-        fetchStats();
-      });
+    if (isAuthenticated) {
+      refetchData();
     }
-  };
+  }, [isAuthenticated, authLoading, router, refetchData]);
 
-  const handleStatusChange = async (messageId: string, newStatus: 'READ' | 'REPLIED' | 'ARCHIVED') => {
-    try {
-      await contactApi.updateContact(messageId, { status: newStatus });
-      fetchMessages();
-      fetchStats();
-    } catch {
-    }
-  };
-
-  const handleDeleteMessage = (message: Contact) => {
-    setSelectedMessage(message);
-    setShowDeleteModal(true);
-  };
-
-  const confirmDelete = async () => {
-    if (!selectedMessage) return;
-    
-    try {
-      await contactApi.deleteContact(selectedMessage.id);
-      setShowDeleteModal(false);
-      setSelectedMessage(null);
-      fetchMessages();
-      fetchStats();
-    } catch {
-    }
-  };
-
-  if (authLoading) {
-    return <LoadingView />;
-  }
+  if (authLoading) return <LoadingView />;
 
   return (
     <div className={`min-h-screen ${ADMIN_STYLES.GRADIENT_BG}`}>
@@ -526,24 +625,16 @@ export default function ContactMessages() {
           </div>
         )}
 
-        <div className={`${ADMIN_STYLES.CARD_BG} rounded-xl ${ADMIN_STYLES.SHADOW} p-6 mb-6`}>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <SearchInput value={searchTerm} onChange={setSearchTerm} />
-            <StatusFilter value={selectedStatus} onChange={setSelectedStatus} />
-            <SortControls 
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              onSortByChange={setSortBy}
-              onSortOrderChange={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-            />
-          </div>
-        </div>
+        <SearchAndFilters 
+          filters={filters}
+          updateFilters={updateFilters}
+        />
 
         <div className={`${ADMIN_STYLES.CARD_BG} rounded-xl ${ADMIN_STYLES.SHADOW} overflow-hidden`}>
           {loading ? (
             <MessageTableLoading />
           ) : error ? (
-            <MessageTableError error={error} onRetry={fetchMessages} />
+            <MessageTableError error={error} onRetry={refetchData} />
           ) : messages.length === 0 ? (
             <MessageTableEmpty />
           ) : (
@@ -617,13 +708,13 @@ export default function ContactMessages() {
 
       <MessageDetailModal 
         message={showMessageModal ? selectedMessage : null}
-        onClose={() => setShowMessageModal(false)}
+        onClose={resetModals}
       />
 
       <DeleteModal 
         message={showDeleteModal ? selectedMessage : null}
-        onConfirm={confirmDelete}
-        onCancel={() => setShowDeleteModal(false)}
+        onConfirm={handleDeleteMessage}
+        onCancel={resetModals}
       />
     </div>
   );
