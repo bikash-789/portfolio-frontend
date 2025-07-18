@@ -1,23 +1,137 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../context/AuthContext';
 import { skillsApi, Skill, CreateSkillRequest } from '../../../lib/api/services/skills';
 import DynamicImage from '@/components/DynamicImage';
 
-export default function SkillsManagement() {
-  const router = useRouter();
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const [skills, setSkills] = useState<Skill[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
+interface SkillState {
+  skills: Skill[];
+  loading: boolean;
+  error: string | null;
+}
+
+interface FilterState {
+  searchTerm: string;
+  selectedCategory: string;
+}
+
+interface ModalState {
+  showAddModal: boolean;
+  showEditModal: boolean;
+  showDeleteModal: boolean;
+  selectedSkill: Skill | null;
+}
+
+const useSkillsManagement = () => {
+  const [state, setState] = useState<SkillState>({
+    skills: [],
+    loading: true,
+    error: null,
+  });
+
+  const [filters, setFilters] = useState<FilterState>({
+    searchTerm: '',
+    selectedCategory: 'all',
+  });
+
+  const fetchSkills = useCallback(async () => {
+    setState(prev => ({ ...prev, loading: true, error: null }));
+    
+    try {
+      const data = await skillsApi.getSkills();
+      
+      if (Array.isArray(data)) {
+        setState(prev => ({ ...prev, skills: data, loading: false }));
+      } else {
+        console.error('API response is not an array:', data);
+        setState(prev => ({ 
+          ...prev, 
+          skills: [], 
+          error: 'Invalid data format received from server',
+          loading: false 
+        }));
+      }
+    } catch (err) {
+      console.error('Error fetching skills:', err);
+      setState(prev => ({ 
+        ...prev, 
+        error: 'Failed to load skills', 
+        skills: [], 
+        loading: false 
+      }));
+    }
+  }, []);
+
+  const updateFilters = useCallback((updates: Partial<FilterState>) => {
+    setFilters(prev => ({ ...prev, ...updates }));
+  }, []);
+
+  const updateSkill = useCallback((updatedSkill: Skill) => {
+    setState(prev => ({
+      ...prev,
+      skills: prev.skills.map(skill => 
+        skill.id === updatedSkill.id ? updatedSkill : skill
+      )
+    }));
+  }, []);
+
+  const addSkill = useCallback((newSkill: Skill) => {
+    setState(prev => ({
+      ...prev,
+      skills: [...prev.skills, newSkill]
+    }));
+  }, []);
+
+  const removeSkill = useCallback((skillId: string) => {
+    setState(prev => ({
+      ...prev,
+      skills: prev.skills.filter(skill => skill.id !== skillId)
+    }));
+  }, []);
+
+  const setError = useCallback((error: string | null) => {
+    setState(prev => ({ ...prev, error }));
+  }, []);
+
+  // Client-side filtering with debouncing for search
+  const filteredSkills = state.skills.filter(skill => {
+    const matchesSearch = skill.name.toLowerCase().includes(filters.searchTerm.toLowerCase()) ||
+                         skill.category.toLowerCase().includes(filters.searchTerm.toLowerCase());
+    const matchesCategory = filters.selectedCategory === 'all' || skill.category === filters.selectedCategory;
+    return matchesSearch && matchesCategory;
+  });
+
+  const categories = ['all', ...Array.from(new Set(state.skills.map(skill => skill.category)))];
+
+  return {
+    ...state,
+    filters,
+    filteredSkills,
+    categories,
+    updateFilters,
+    fetchSkills,
+    updateSkill,
+    addSkill,
+    removeSkill,
+    setError,
+  };
+};
+
+const useSkillActions = (
+  updateSkill: (skill: Skill) => void,
+  addSkill: (skill: Skill) => void,
+  removeSkill: (skillId: string) => void,
+  setError: (error: string | null) => void
+) => {
+  const [modalState, setModalState] = useState<ModalState>({
+    showAddModal: false,
+    showEditModal: false,
+    showDeleteModal: false,
+    selectedSkill: null,
+  });
+
   const [formData, setFormData] = useState<CreateSkillRequest>({
     name: '',
     category: '',
@@ -28,90 +142,7 @@ export default function SkillsManagement() {
     featured: false
   });
 
-  useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      router.push('/login');
-    }
-  }, [isAuthenticated, authLoading, router]);
-
-  useEffect(() => {
-    const fetchSkills = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await skillsApi.getSkills();
-        
-        if (Array.isArray(data)) {
-          setSkills(data);
-        } else {
-          console.error('API response is not an array:', data);
-          setSkills([]);
-          setError('Invalid data format received from server');
-        }
-      } catch (err) {
-        console.error('Error fetching skills:', err);
-        setError('Failed to load skills');
-        setSkills([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (isAuthenticated) {
-      fetchSkills();
-    }
-  }, [isAuthenticated]);
-
-  const categories = ['all', ...Array.from(new Set((skills || []).map(skill => skill.category)))];
-
-  const filteredSkills = (skills || []).filter(skill => {
-    const matchesSearch = skill.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         skill.category.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = selectedCategory === 'all' || skill.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
-
-  const handleAddSkill = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const newSkill = await skillsApi.createSkill(formData);
-      setSkills([...(skills || []), newSkill]);
-      setShowAddModal(false);
-      resetForm();
-    } catch {
-      setError('Failed to add skill');
-    }
-  };
-
-  const handleEditSkill = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedSkill) return;
-    
-    try {
-      const updatedSkill = await skillsApi.updateSkill(selectedSkill.id, formData);
-      setSkills((skills || []).map(skill => skill.id === selectedSkill.id ? updatedSkill : skill));
-      setShowEditModal(false);
-      setSelectedSkill(null);
-      resetForm();
-    } catch {
-      setError('Failed to update skill');
-    }
-  };
-
-  const handleDeleteSkill = async () => {
-    if (!selectedSkill) return;
-    
-    try {
-      await skillsApi.deleteSkill(selectedSkill.id);
-      setSkills((skills || []).filter(skill => skill.id !== selectedSkill.id));
-      setShowDeleteModal(false);
-      setSelectedSkill(null);
-    } catch {
-      setError('Failed to delete skill');
-    }
-  };
-
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     setFormData({
       name: '',
       category: '',
@@ -121,10 +152,19 @@ export default function SkillsManagement() {
       yearsOfExperience: 0,
       featured: false
     });
-  };
+  }, []);
 
-  const openEditModal = (skill: Skill) => {
-    setSelectedSkill(skill);
+  const openAddModal = useCallback(() => {
+    resetForm();
+    setModalState(prev => ({ ...prev, showAddModal: true }));
+  }, [resetForm]);
+
+  const openEditModal = useCallback((skill: Skill) => {
+    setModalState(prev => ({ 
+      ...prev, 
+      selectedSkill: skill,
+      showEditModal: true 
+    }));
     setFormData({
       name: skill.name,
       category: skill.category,
@@ -134,13 +174,117 @@ export default function SkillsManagement() {
       yearsOfExperience: skill.yearsOfExperience || 0,
       featured: skill.featured || false
     });
-    setShowEditModal(true);
-  };
+  }, []);
 
-  const openDeleteModal = (skill: Skill) => {
-    setSelectedSkill(skill);
-    setShowDeleteModal(true);
+  const openDeleteModal = useCallback((skill: Skill) => {
+    setModalState(prev => ({ 
+      ...prev, 
+      selectedSkill: skill,
+      showDeleteModal: true 
+    }));
+  }, []);
+
+  const closeModals = useCallback(() => {
+    setModalState({
+      showAddModal: false,
+      showEditModal: false,
+      showDeleteModal: false,
+      selectedSkill: null,
+    });
+    resetForm();
+  }, [resetForm]);
+
+  const handleAddSkill = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const newSkill = await skillsApi.createSkill(formData);
+      addSkill(newSkill);
+      closeModals();
+    } catch {
+      setError('Failed to add skill');
+    }
+  }, [formData, addSkill, closeModals, setError]);
+
+  const handleEditSkill = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modalState.selectedSkill) return;
+    
+    try {
+      const updatedSkill = await skillsApi.updateSkill(modalState.selectedSkill.id, formData);
+      updateSkill(updatedSkill);
+      closeModals();
+    } catch {
+      setError('Failed to update skill');
+    }
+  }, [formData, modalState.selectedSkill, updateSkill, closeModals, setError]);
+
+  const handleDeleteSkill = useCallback(async () => {
+    if (!modalState.selectedSkill) return;
+    
+    try {
+      await skillsApi.deleteSkill(modalState.selectedSkill.id);
+      removeSkill(modalState.selectedSkill.id);
+      closeModals();
+    } catch {
+      setError('Failed to delete skill');
+    }
+  }, [modalState.selectedSkill, removeSkill, closeModals, setError]);
+
+  return {
+    modalState,
+    formData,
+    setFormData,
+    openAddModal,
+    openEditModal,
+    openDeleteModal,
+    closeModals,
+    handleAddSkill,
+    handleEditSkill,
+    handleDeleteSkill,
   };
+};
+
+export default function SkillsManagement() {
+  const router = useRouter();
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const {
+    loading,
+    error,
+    filters,
+    filteredSkills,
+    categories,
+    updateFilters,
+    fetchSkills,
+    updateSkill,
+    addSkill,
+    removeSkill,
+    setError,
+  } = useSkillsManagement();
+
+  const {
+    modalState,
+    formData,
+    setFormData,
+    openAddModal,
+    openEditModal,
+    openDeleteModal,
+    closeModals,
+    handleAddSkill,
+    handleEditSkill,
+    handleDeleteSkill,
+  } = useSkillActions(updateSkill, addSkill, removeSkill, setError);
+
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) {
+      router.push('/login');
+    }
+  }, [isAuthenticated, authLoading, router]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchSkills();
+    }
+  }, [isAuthenticated, fetchSkills]);
 
   const getLevelColor = (level: Skill['level']) => {
     switch (level) {
@@ -189,7 +333,7 @@ export default function SkillsManagement() {
               <h1 className="text-2xl font-bold text-secondary-900 dark:text-white">Skills Management</h1>
             </div>
             <button
-              onClick={() => setShowAddModal(true)}
+              onClick={openAddModal}
               className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors duration-200"
             >
               Add New Skill
@@ -214,15 +358,15 @@ export default function SkillsManagement() {
               <input
                 type="text"
                 placeholder="Search skills..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                value={filters.searchTerm}
+                onChange={(e) => updateFilters({ searchTerm: e.target.value })}
                 className="w-full px-4 py-2 border border-secondary-300 dark:border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 dark:bg-dark-700 dark:text-white"
               />
             </div>
             <div className="sm:w-48">
               <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
+                value={filters.selectedCategory}
+                onChange={(e) => updateFilters({ selectedCategory: e.target.value })}
                 className="w-full px-4 py-2 border border-secondary-300 dark:border-dark-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 dark:bg-dark-700 dark:text-white"
               >
                 {categories.map(category => (
@@ -331,13 +475,13 @@ export default function SkillsManagement() {
       </div>
 
       {/* Add/Edit Modal */}
-      {(showAddModal || showEditModal) && (
+      {(modalState.showAddModal || modalState.showEditModal) && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-dark-800 rounded-lg p-6 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold text-secondary-900 dark:text-white mb-4">
-              {showAddModal ? 'Add New Skill' : 'Edit Skill'}
+              {modalState.showAddModal ? 'Add New Skill' : 'Edit Skill'}
             </h2>
-            <form onSubmit={showAddModal ? handleAddSkill : handleEditSkill} className="space-y-4">
+            <form onSubmit={modalState.showAddModal ? handleAddSkill : handleEditSkill} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-secondary-700 dark:text-dark-300 mb-1">
                   Name *
@@ -428,11 +572,7 @@ export default function SkillsManagement() {
               <div className="flex justify-end space-x-4 pt-4">
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowAddModal(false);
-                    setShowEditModal(false);
-                    resetForm();
-                  }}
+                  onClick={closeModals}
                   className="px-4 py-2 text-secondary-700 dark:text-dark-300 hover:text-secondary-900 dark:hover:text-white"
                 >
                   Cancel
@@ -441,7 +581,7 @@ export default function SkillsManagement() {
                   type="submit"
                   className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors duration-200"
                 >
-                  {showAddModal ? 'Add Skill' : 'Update Skill'}
+                  {modalState.showAddModal ? 'Add Skill' : 'Update Skill'}
                 </button>
               </div>
             </form>
@@ -450,21 +590,18 @@ export default function SkillsManagement() {
       )}
 
       {/* Delete Modal */}
-      {showDeleteModal && selectedSkill && (
+      {modalState.showDeleteModal && modalState.selectedSkill && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-dark-800 rounded-lg p-6 w-full max-w-md mx-4">
             <h2 className="text-xl font-bold text-secondary-900 dark:text-white mb-4">
               Delete Skill
             </h2>
             <p className="text-secondary-600 dark:text-dark-300 mb-6">
-              Are you sure you want to delete &quot;{selectedSkill.name}&quot;? This action cannot be undone.
+              Are you sure you want to delete &quot;{modalState.selectedSkill.name}&quot;? This action cannot be undone.
             </p>
             <div className="flex justify-end space-x-4">
               <button
-                onClick={() => {
-                  setShowDeleteModal(false);
-                  setSelectedSkill(null);
-                }}
+                onClick={closeModals}
                 className="px-4 py-2 text-secondary-700 dark:text-dark-300 hover:text-secondary-900 dark:hover:text-white"
               >
                 Cancel
