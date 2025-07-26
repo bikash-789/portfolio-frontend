@@ -1,5 +1,5 @@
-import type { Metadata } from 'next';
-import { API_CONFIG, METADATA_CONFIG, SEO_CONFIG, SITE_CONFIG } from '../constants';
+import type { Metadata } from "next";
+import { METADATA_CONFIG, SEO_CONFIG, SITE_CONFIG } from "../constants";
 
 interface PersonalInfo {
   name?: string;
@@ -10,22 +10,6 @@ interface PersonalInfo {
 }
 
 class MetadataService {
-  private async fetchPersonalInfo(): Promise<PersonalInfo | null> {
-    try {
-      const response = await fetch(`${API_CONFIG.BASE_URL}/profile/personal`, {
-        cache: 'no-store',
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
-    } catch (error) {
-      console.error('Error fetching personal info for metadata:', error);
-    }
-    
-    return null;
-  }
-
   private createDefaultMetadata(): Metadata {
     return {
       title: METADATA_CONFIG.DEFAULT_TITLE,
@@ -40,25 +24,26 @@ class MetadataService {
   private createPersonalizedMetadata(personalInfo: PersonalInfo): Metadata {
     const name = personalInfo.name || SITE_CONFIG.NAME;
     const title = personalInfo.title || SITE_CONFIG.DEFAULT_TITLE;
-    const description = personalInfo.description || METADATA_CONFIG.DEFAULT_DESCRIPTION;
+    const description =
+      personalInfo.description || METADATA_CONFIG.DEFAULT_DESCRIPTION;
 
     return {
       title: `${name} | ${title}`,
       description,
-      keywords: [
-        ...METADATA_CONFIG.DEFAULT_KEYWORDS,
-        name,
-      ],
+      keywords: [...METADATA_CONFIG.DEFAULT_KEYWORDS, name],
       authors: [{ name }],
       creator: name,
       publisher: name,
     };
   }
 
-  private createOpenGraphMetadata(personalInfo: PersonalInfo | null): Metadata['openGraph'] {
+  private createOpenGraphMetadata(
+    personalInfo: PersonalInfo | null
+  ): Metadata["openGraph"] {
     const name = personalInfo?.name || SITE_CONFIG.NAME;
     const title = personalInfo?.title || SITE_CONFIG.DEFAULT_TITLE;
-    const description = personalInfo?.description || METADATA_CONFIG.DEFAULT_DESCRIPTION;
+    const description =
+      personalInfo?.description || METADATA_CONFIG.DEFAULT_DESCRIPTION;
     const heroImage = personalInfo?.heroImage || METADATA_CONFIG.OG_IMAGE;
 
     return {
@@ -75,21 +60,24 @@ class MetadataService {
         },
       ],
       locale: METADATA_CONFIG.LOCALE,
-      type: 'website',
+      type: "website",
     };
   }
 
-  private createTwitterMetadata(personalInfo: PersonalInfo | null): Metadata['twitter'] {
+  private createTwitterMetadata(
+    personalInfo: PersonalInfo | null
+  ): Metadata["twitter"] {
     const name = personalInfo?.name || SITE_CONFIG.NAME;
     const title = personalInfo?.title || SITE_CONFIG.DEFAULT_TITLE;
-    const description = personalInfo?.description || METADATA_CONFIG.DEFAULT_DESCRIPTION;
+    const description =
+      personalInfo?.description || METADATA_CONFIG.DEFAULT_DESCRIPTION;
     const heroImage = personalInfo?.heroImage || METADATA_CONFIG.OG_IMAGE;
-    const twitterHandle = personalInfo?.socialLinks?.find(link => 
-      link.name === 'Twitter'
-    )?.url || METADATA_CONFIG.TWITTER_HANDLE;
+    const twitterHandle =
+      personalInfo?.socialLinks?.find((link) => link.name === "Twitter")?.url ||
+      METADATA_CONFIG.TWITTER_HANDLE;
 
     return {
-      card: 'summary_large_image',
+      card: "summary_large_image",
       title: `${name} | ${title}`,
       description,
       images: [heroImage],
@@ -97,10 +85,8 @@ class MetadataService {
     };
   }
 
-  public async generateMetadata(): Promise<Metadata> {
-    const personalInfo = await this.fetchPersonalInfo();
-    
-    const baseMetadata = personalInfo 
+  public generateMetadata(personalInfo?: PersonalInfo): Metadata {
+    const baseMetadata = personalInfo
       ? this.createPersonalizedMetadata(personalInfo)
       : this.createDefaultMetadata();
 
@@ -113,19 +99,19 @@ class MetadataService {
       },
       metadataBase: new URL(METADATA_CONFIG.SITE_URL),
       alternates: {
-        canonical: '/',
+        canonical: "/",
       },
-      openGraph: this.createOpenGraphMetadata(personalInfo),
-      twitter: this.createTwitterMetadata(personalInfo),
+      openGraph: this.createOpenGraphMetadata(personalInfo || null),
+      twitter: this.createTwitterMetadata(personalInfo || null),
       robots: {
         index: SEO_CONFIG.ROBOTS.INDEX,
         follow: SEO_CONFIG.ROBOTS.FOLLOW,
         googleBot: {
           index: SEO_CONFIG.ROBOTS.GOOGLE_BOT.INDEX,
           follow: SEO_CONFIG.ROBOTS.GOOGLE_BOT.FOLLOW,
-          'max-video-preview': SEO_CONFIG.ROBOTS.GOOGLE_BOT.MAX_VIDEO_PREVIEW,
-          'max-image-preview': SEO_CONFIG.ROBOTS.GOOGLE_BOT.MAX_IMAGE_PREVIEW,
-          'max-snippet': SEO_CONFIG.ROBOTS.GOOGLE_BOT.MAX_SNIPPET,
+          "max-video-preview": SEO_CONFIG.ROBOTS.GOOGLE_BOT.MAX_VIDEO_PREVIEW,
+          "max-image-preview": SEO_CONFIG.ROBOTS.GOOGLE_BOT.MAX_IMAGE_PREVIEW,
+          "max-snippet": SEO_CONFIG.ROBOTS.GOOGLE_BOT.MAX_SNIPPET,
         },
       },
       verification: {
@@ -135,4 +121,4 @@ class MetadataService {
   }
 }
 
-export const metadataService = new MetadataService(); 
+export const metadataService = new MetadataService();
